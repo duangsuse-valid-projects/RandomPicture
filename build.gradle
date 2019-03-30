@@ -30,7 +30,7 @@ compileKotlin {
     kotlinOptions.jvmTarget = jvmTarget
 }
 
-def mainClassId = 'org.duangsuse.fushion.RandomPicture'
+def mainClassId = 'io.vertx.core.Launcher'
 def jarAttrs = ['Main-Class': 'io.vertx.core.Launcher', 'Main-Verticle': mainClassId]
 
 mainClassName = mainClassId
