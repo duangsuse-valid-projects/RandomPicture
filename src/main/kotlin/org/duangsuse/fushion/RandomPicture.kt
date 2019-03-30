@@ -11,14 +11,14 @@ import io.vertx.core.logging.*
 
 typealias Path = String
 
-fun Future<*>.catch(chain: Future<*>) = if (this.succeeded()) chain.complete() else chain.fail(this.cause())
+fun <A, B> Future<A>.catching(chain: Future<B>): Future<A> = this.also { if (this.succeeded()) chain.complete() else chain.fail(this.cause()) }
 
 /**
  * Random picture service
  */
 class RandomPicture: AbstractVerticle() {
     private val pictures: MutableList<Path> = mutableListOf()
-    private val server: HttpServer = vertx.createHttpServer()
+    private lateinit var server: HttpServer
 
     private val logger = LoggerFactory.getLogger(this.javaClass.name)
 
@@ -35,10 +35,13 @@ class RandomPicture: AbstractVerticle() {
 
         val startServerPromise = Future.future<HttpServer> {
             fut ->
+            server = vertx.createHttpServer()
             val router = setupRouter()
             server.requestHandler(router)
             server.listen(PORT_DEF, fut)
-        }.catch(startFuture)
+        }.catching(startFuture)
+
+        CompositeFuture.all(indexImagePromise, startServerPromise)
     }
 
     private fun setupRouter(): Router {
@@ -60,7 +63,7 @@ class RandomPicture: AbstractVerticle() {
 
         if (!f.exists() or f.isFile) {
             future?.fail("Failed to get image file path")
-            throw IOException("Bad input dir $v ($ENV_DIR) is not exists or not folder")
+            throw IOException("Bad input dir $v ($ENV_DIR) is not exists or not a folder")
         }
 
         return f.path
