@@ -97,7 +97,7 @@ class RandomPicture: AbstractVerticle() {
         const val ENV_DIR = "RANDOM_PICTURE"
         const val IMAGE_SERVICE_PATH = "/"
 
-        private const val ACCEPTABLE_EXTENSIONS = "png,jpg,jpeg,gif,webp"
+        private const val ACCEPTABLE_EXTENSIONS = "png,jpg,jpeg,gif,webp,raw,bmp,img,svg"
 
         val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').fold(StringBuilder()) { ac, x -> ac.append("|\\.").append(x) }.let { "($it)" }.let(::Regex)
 
