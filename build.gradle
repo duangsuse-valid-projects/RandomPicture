@@ -8,10 +8,12 @@ buildscript {
 
     repositories {
         mavenCentral()
-
+        maven { url "https://plugins.gradle.org/m2/" }
     }
+
     dependencies {
         classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlinVersion"
+        classpath "com.github.jengelman.gradle.plugins:shadow:5.0.0"
     }
 }
 
@@ -20,6 +22,8 @@ repositories { mavenCentral() }
 apply plugin: 'kotlin'
 apply plugin: 'java'
 apply plugin: 'application'
+apply plugin: 'com.github.johnrengelman.shadow'
+
 
 compileKotlin {
     kotlinOptions.languageVersion = '1.3'
@@ -27,12 +31,23 @@ compileKotlin {
 }
 
 def mainClassId = 'org.duangsuse.fushion.RandomPicture'
+def jarAttrs = ['Main-Class': 'io.vertx.core.Launcher', 'Main-Verticle': mainClassId]
 
 mainClassName = mainClassId
 
 jar {
     manifest {
-        attributes 'Main-Class': 'io.vertx.core.Launcher', 'Main-Verticle': mainClassId
+        attributes jarAttrs
+    }
+}
+
+shadowJar {
+    baseName = 'server'
+    classifier = null
+    version = rootProject.version
+
+    manifest {
+        attributes jarAttrs
     }
 }
 
