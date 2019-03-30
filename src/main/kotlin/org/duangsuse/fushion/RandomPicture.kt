@@ -11,7 +11,7 @@ import io.vertx.core.logging.*
 
 typealias Path = String
 
-fun <A, B> Future<A>.catching(chain: Future<B>): Future<A> = this.also { if (this.succeeded()) chain.complete() else chain.fail(this.cause()) }
+fun <A, B> Future<A>.catching(chain: Future<B>): Future<A> = this.setHandler { if (this.succeeded()) chain.complete() else chain.fail(this.cause()) }
 
 /**
  * Random picture service
@@ -38,7 +38,7 @@ class RandomPicture: AbstractVerticle() {
             server = vertx.createHttpServer()
             val router = setupRouter()
             server.requestHandler(router)
-            server.listen(PORT_DEF, fut)
+            server.listen(env(ENV_PORT)?.toInt() ?: PORT_DEF, fut)
         }.catching(startFuture)
 
         CompositeFuture.all(indexImagePromise, startServerPromise)
@@ -58,7 +58,7 @@ class RandomPicture: AbstractVerticle() {
     }
 
     fun envImagePath(future: Future<*>?): Path {
-        val v = System.getenv(ENV_DIR) ?: "/app/favourite"
+        val v = env(ENV_DIR) ?: "/app/favourite"
         val f = File(v)
 
         if (!f.exists() or f.isFile) {
@@ -75,12 +75,15 @@ class RandomPicture: AbstractVerticle() {
             if (isImageFile(f)) return true
             return false.also { logger.info("Ignoring non-picture file ${f.path}") }
         }
+        val count_ = mutableListOf<File>()
         val seq = path.let(::File).walk()
             .onEnter(indexImageLogging(">"))
             .onFail { f, _ -> indexImageLogging("!!")(f) }
             .onLeave { d -> indexImageLogging("<")(d) }
-        seq.filter(::logIsImageFile)
-           .map(File::getName).forEach { x -> pictures.add(x) }
+        seq.filterTo(count_, ::logIsImageFile)
+        seq.map(File::getAbsolutePath).forEach { x: Path -> pictures.add(x) }
+
+        logger.info("${count_.size - pictures.size} files ignored")
     }
 
     fun randomImage(): Path = pictures[Random.nextInt(pictures.size)]
@@ -98,9 +101,11 @@ class RandomPicture: AbstractVerticle() {
     companion object Constants {
         const val PORT_DEF = 8080
         const val ENV_DIR = "RANDOM_PICTURE"
+        const val ENV_PORT = "PORT"
         const val IMAGE_SERVICE_PATH = "/"
 
         private const val ACCEPTABLE_EXTENSIONS = "png,jpg,jpeg,gif,webp,raw,bmp,img,svg"
+        private fun env(name: String): String? = System.getenv(name)
 
         val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').fold(StringBuilder()) { ac, x -> ac.append("|\\.").append(x) }.let { "($it)" }.let(::Regex)
 
