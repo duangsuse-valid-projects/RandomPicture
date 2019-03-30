@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+Main-Verticle: org.duangsuse.fushion.RandomPicture
+Main-Class: io.vertx.core.Launcher
+
