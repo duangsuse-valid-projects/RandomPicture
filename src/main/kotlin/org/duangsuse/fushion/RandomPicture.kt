@@ -14,7 +14,7 @@ typealias Path = String
 
 //// Helper functions
 fun <A, B> Future<A>.catching(chain: Future<B>): Future<A> = this.setHandler { if (this.succeeded()) chain.complete() else chain.fail(this.cause()) }
-fun <T> List<T>.sample(): T = this[Random.nextInt(this.size)]
+fun <T> List<T>.sample(): T = this[Random.nextInt(this.lastIndex)]
 
 /**
  * Random picture service
@@ -35,13 +35,18 @@ class RandomPicture: AbstractVerticle() {
      */
     override fun start(startFuture: Future<Void>) {
         val imagePath = checkImagePath(startFuture)
+        logger.info("Checking with regex /$ACCEPTABLE_REGEX/")
 
         val indexImagePromise = Future.future<Any> {
-            withTimeLog("Indexing images") {
-                indexImage(imagePath)
-                " size ${pictures.size}"
+            imagePath?.run {
+                withTimeLog("indexing images") {
+                    indexImage(imagePath)
+                    " size ${pictures.size}"
+                }
+                it.complete()
+                return@future
             }
-            it.complete()
+            it.fail("Failed checking images dir!")
         }
 
         val startServerPromise = Future.future<HttpServer> {
@@ -52,6 +57,8 @@ class RandomPicture: AbstractVerticle() {
 
             val listenPort = Helper.env(ENV_PORT)?.toInt() ?: PORT_DEF
             server.listen(listenPort, fut)
+
+            println("Server started at http://localhost:${server.actualPort()}")
         }.catching(startFuture)
 
         CompositeFuture.all(indexImagePromise, startServerPromise)
@@ -81,22 +88,21 @@ class RandomPicture: AbstractVerticle() {
     }
 
     //// Application random image path
-    fun checkImagePath(parentPromise: Future<*>?): Path {
+    fun checkImagePath(parentPromise: Future<*>?): Path? {
         val v = Helper.env(ENV_DIR) ?: "/app/favourite"
         val f = File(v)
 
         if (!f.exists() or f.isFile) {
-            parentPromise?.fail("Failed to get image file path")
-            throw IOException("Input path $v ($ENV_DIR) should be exists and is folder")
+            parentPromise?.fail("Input path $v ($ENV_DIR) should be exists and is folder")
+            return null
         }
 
         return f.path
     }
 
     fun indexImage(path: Path) {
-        val indexImageLogging: (String) -> (File) -> Boolean = { i -> { f -> withTimeLog(i, " (${f.name})"); true } }
+        val indexImageLogging = { msg: String -> { f: File -> withTimeLog(msg, " (${f.name})"); true } }
 
-        val count_ = mutableListOf<File>()
         val seq = path.let(::File).walk()
             .onEnter(indexImageLogging(">"))
             .onFail { f, _ -> indexImageLogging("!!")(f) }
@@ -107,20 +113,21 @@ class RandomPicture: AbstractVerticle() {
             return false.also { logger.warn("Ignoring non-picture file ${f.path}") }
         }
 
-        seq.filterTo(count_, ::logIsImageFile)
-           .map(File::getAbsolutePath).forEach { x: Path -> pictures.add(x) }
+        val (accepted, ignored) = seq.partition(::logIsImageFile)
 
-        logger.warn("${count_.size - pictures.size} files ignored")
+        accepted.map(File::getAbsolutePath).forEach { x -> pictures.add(x) }
+
+        logger.warn("${ignored.size} files ignored, ${pictures.size} files added")
     }
 
     private fun withTimeLog(name: String, desc: String) = withTimeLog(name) { desc }
     private fun withTimeLog(name: String, op: () -> String?) {
         val started = Helper.timeTicks()
-        logger.info("Begin doing $name")
+        logger.info("Begin $name")
         val desc = op() ?: ""
         val ended = Helper.timeTicks()
         val duration = ended - started
-        logger.info("Finished doing $name$desc costs $duration")
+        logger.info("Finished $name$desc costs $duration ms")
     }
 
     companion object Constants {
@@ -130,7 +137,7 @@ class RandomPicture: AbstractVerticle() {
         const val IMAGE_SERVICE_PATH = "/"
 
         private const val ACCEPTABLE_EXTENSIONS = "png,jpg,jpeg,gif,webp,raw,bmp,img,svg"
-        val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').map("\\."::plus).joinToString("|").let { "($it)" }.let(::Regex)
+        val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').map("\\."::plus).joinToString("|").let { "^.*($it)$" }.let(::Regex)
     }
 
     object Helper {
