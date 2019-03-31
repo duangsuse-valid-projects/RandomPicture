@@ -9,21 +9,32 @@ import io.vertx.ext.web.*
 import io.vertx.core.http.*
 import io.vertx.core.logging.*
 
+//// Typedefs
 typealias Path = String
 
+//// Helper functions
 fun <A, B> Future<A>.catching(chain: Future<B>): Future<A> = this.setHandler { if (this.succeeded()) chain.complete() else chain.fail(this.cause()) }
+fun <T> List<T>.sample(): T = this[Random.nextInt(this.size)]
 
 /**
  * Random picture service
  */
 class RandomPicture: AbstractVerticle() {
     private val pictures: MutableList<Path> = mutableListOf()
+
     private lateinit var server: HttpServer
 
     private val logger = LoggerFactory.getLogger(this.javaClass.name)
 
+
+    /**
+     * Application start logic:
+     *
+     * + starts image index function (checkPathEnvironment, indexImages)
+     * + starts server (drawRoutes, createHttpServer, listen)
+     */
     override fun start(startFuture: Future<Void>) {
-        val imagePath = envImagePath(startFuture)
+        val imagePath = checkImagePath(startFuture)
 
         val indexImagePromise = Future.future<Any> {
             withTimeLog("Indexing images") {
@@ -35,16 +46,28 @@ class RandomPicture: AbstractVerticle() {
 
         val startServerPromise = Future.future<HttpServer> {
             fut ->
-            server = vertx.createHttpServer()
-            val router = setupRouter()
-            server.requestHandler(router)
-            server.listen(env(ENV_PORT)?.toInt() ?: PORT_DEF, fut)
+            
+            val router = drawRoutes()
+            server = createHttpServer(router)
+
+            val listenPort = Helper.env(ENV_PORT)?.toInt() ?: PORT_DEF
+            server.listen(listenPort, fut)
         }.catching(startFuture)
 
         CompositeFuture.all(indexImagePromise, startServerPromise)
     }
 
-    private fun setupRouter(): Router {
+    //// Serveice HTTP Server abstraction
+    private fun createHttpServer(router: Router): HttpServer {
+        val httpSrv = vertx.createHttpServer()
+
+        httpSrv.requestHandler(router)
+        return httpSrv
+    }
+
+    fun randomImage(): Path = pictures.sample()
+
+    private fun drawRoutes(): Router {
         val router = Router.router(vertx)
 
         router.route(HttpMethod.GET, IMAGE_SERVICE_PATH).handler {
@@ -57,13 +80,14 @@ class RandomPicture: AbstractVerticle() {
         return router
     }
 
-    fun envImagePath(future: Future<*>?): Path {
-        val v = env(ENV_DIR) ?: "/app/favourite"
+    //// Application random image path
+    fun checkImagePath(parentPromise: Future<*>?): Path {
+        val v = Helper.env(ENV_DIR) ?: "/app/favourite"
         val f = File(v)
 
         if (!f.exists() or f.isFile) {
-            future?.fail("Failed to get image file path")
-            throw IOException("Bad input dir $v ($ENV_DIR) is not exists or not a folder")
+            parentPromise?.fail("Failed to get image file path")
+            throw IOException("Input path $v ($ENV_DIR) should be exists and is folder")
         }
 
         return f.path
@@ -71,31 +95,32 @@ class RandomPicture: AbstractVerticle() {
 
     fun indexImage(path: Path) {
         val indexImageLogging: (String) -> (File) -> Boolean = { i -> { f -> withTimeLog(i, " (${f.name})"); true } }
-        fun logIsImageFile(f: File): Boolean {
-            if (isImageFile(f)) return true
-            return false.also { logger.info("Ignoring non-picture file ${f.path}") }
-        }
+
         val count_ = mutableListOf<File>()
         val seq = path.let(::File).walk()
             .onEnter(indexImageLogging(">"))
             .onFail { f, _ -> indexImageLogging("!!")(f) }
             .onLeave { d -> indexImageLogging("<")(d) }
+
+        fun logIsImageFile(f: File): Boolean {
+            if (Helper.isImageFile(f)) return true
+            return false.also { logger.warn("Ignoring non-picture file ${f.path}") }
+        }
+
         seq.filterTo(count_, ::logIsImageFile)
-        seq.map(File::getAbsolutePath).forEach { x: Path -> pictures.add(x) }
+           .map(File::getAbsolutePath).forEach { x: Path -> pictures.add(x) }
 
-        logger.info("${count_.size - pictures.size} files ignored")
+        logger.warn("${count_.size - pictures.size} files ignored")
     }
-
-    fun randomImage(): Path = pictures[Random.nextInt(pictures.size)]
 
     private fun withTimeLog(name: String, desc: String) = withTimeLog(name) { desc }
     private fun withTimeLog(name: String, op: () -> String?) {
-        val started = System.currentTimeMillis()
-        logger.info("Begin doing $name at $started")
+        val started = Helper.timeTicks()
+        logger.info("Begin doing $name")
         val desc = op() ?: ""
-        val ended = System.currentTimeMillis()
+        val ended = Helper.timeTicks()
         val duration = ended - started
-        logger.info("Finished doing $name$desc at $ended costs $duration")
+        logger.info("Finished doing $name$desc costs $duration")
     }
 
     companion object Constants {
@@ -105,11 +130,13 @@ class RandomPicture: AbstractVerticle() {
         const val IMAGE_SERVICE_PATH = "/"
 
         private const val ACCEPTABLE_EXTENSIONS = "png,jpg,jpeg,gif,webp,raw,bmp,img,svg"
-        private fun env(name: String): String? = System.getenv(name)
+        val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').map("\\."::plus).joinToString("|").let { "($it)" }.let(::Regex)
+    }
 
-        val ACCEPTABLE_REGEX = ACCEPTABLE_EXTENSIONS.split(',').fold(StringBuilder()) { ac, x -> ac.append("|\\.").append(x) }.let { "($it)" }.let(::Regex)
-
-        private fun isImageFile(f: File) = ACCEPTABLE_REGEX.matches(f.name)
+    object Helper {
+        internal fun env(name: String): String? = System.getenv(name)
+        internal fun isImageFile(f: File) = ACCEPTABLE_REGEX.matches(f.name)
+        internal fun timeTicks(): Long = System.currentTimeMillis()
     }
 }
 
