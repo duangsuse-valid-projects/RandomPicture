@@ -11,6 +11,8 @@ import io.vertx.ext.web.*
 import io.vertx.core.http.*
 import io.vertx.core.logging.*
 
+import sun.misc.Signal
+
 //// Typedefs
 typealias Path = String
 
@@ -71,7 +73,42 @@ class RandomPicture: AbstractVerticle() {
             println("Server started at http://localhost:${server.actualPort()}")
         }.catching(startFuture)
 
-        CompositeFuture.all(indexImagePromise, startServerPromise)
+        val registerAndRunSigHandlerPromise = Future.future<Nothing> {
+            chain ->
+            logger.info("Registering refresh list signal handler...")
+            val sh = object: ServiceSignalHandler(setOf(Signal("INT"))) {
+                var sizeDiff: Int = 1 // for the first time
+                override fun sigAction(sig: Signal) = refresh()
+
+                fun refresh() {
+                    // refresh list and show
+                    logger.info("Refreshing pictures list...")
+
+                    if (sizeDiff > 0) {
+                        println("== All files")
+                        println(pictures.indices.zip(pictures).map { "${it.first}:\t${it.second}" }.joinToString("\n"))
+                    }
+
+                    val oldCollection = pictures.toMutableSet() // shadow copy
+                    val oldSize = pictures.size
+                    withTimeLog("Cleaning old list", Runnable { pictures.clear() })
+
+                    withTimeLog("Indexing new images...") {
+                        checkImagePath(chain)?.let(::indexImage)
+                        sizeDiff = pictures.size - oldSize
+                        " $sizeDiff files added"
+                    }
+
+                    println("== New files")
+                    pictures.toSet().minus(oldCollection).forEach(::println)
+                }
+            }
+
+            ServiceSignalHandler.Helper.install("INT", sh)
+            logger.info("Finished registration")
+        }
+
+        CompositeFuture.all(indexImagePromise, startServerPromise, registerAndRunSigHandlerPromise)
     }
 
     //// Serveice HTTP Server abstraction
@@ -157,6 +194,7 @@ class RandomPicture: AbstractVerticle() {
     }
 
     private fun withTimeLog(name: String, desc: String) = withTimeLog(name) { desc }
+    private fun withTimeLog(name: String, op: Runnable) = withTimeLog(name) { op.run() ; "" }
     private fun withTimeLog(name: String, op: () -> String?) {
         val started = Helper.timeTicks()
         logger.info("Begin $name")
